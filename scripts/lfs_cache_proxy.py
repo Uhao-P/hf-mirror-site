@@ -33,7 +33,10 @@ def robust_download(url, local_path):
         if result.returncode == 0 and os.path.exists(temp_path):
             h = hashlib.sha256()
             with open(temp_path, "rb") as f:
-                while chunk := f.read(1024*1024):
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
                     h.update(chunk)
             sha_val = h.hexdigest()
             
@@ -50,14 +53,26 @@ def robust_download(url, local_path):
             if local_path in active_downloads:
                 active_downloads.remove(local_path)
 
-@app.route('/proxy/<protocol>/<domain>/<path:path>')
-def dynamic_proxy(protocol, domain, path):
+@app.route('/proxy/<protocol>/<domain>/<path:path>', methods=['GET', 'HEAD'])
+@app.route('/proxy/<protocol>/<path:path>', methods=['GET', 'HEAD'])
+def dynamic_proxy(protocol, domain=None, path=None):
+    if domain is None and path:
+        parts = path.split('/', 1)
+        domain = parts[0]
+        path = parts[1] if len(parts) > 1 else ""
+    
+    if not domain or not path:
+        return "Invalid path", 400
+
     full_request_path = request.full_path
-    prefix = f"/proxy/{protocol}/{domain}/"
-    if full_request_path.startswith(prefix):
-        actual_path_and_query = full_request_path[len(prefix):]
+    search_key = f"/{protocol}/{domain}/"
+    start_idx = full_request_path.find(search_key)
+    if start_idx != -1:
+        actual_path_and_query = full_request_path[start_idx + len(search_key):]
     else:
         actual_path_and_query = path
+        if request.query_string:
+            actual_path_and_query += "?" + request.query_string.decode('utf-8')
         
     real_url = f"{protocol}://{domain}/{actual_path_and_query}"
     
@@ -65,21 +80,44 @@ def dynamic_proxy(protocol, domain, path):
     local_file_path = os.path.join(CACHE_ROOT, cache_key_path)
     
     range_header = request.headers.get('Range')
-    print(f"[*] [LFS] {real_url} | Range: {range_header}")
+    print(f"[*] [LFS] {request.method} {real_url} | Range: {range_header}")
 
     if os.path.exists(local_file_path):
+        if request.method == 'HEAD':
+            size = os.path.getsize(local_file_path)
+            resp = Response(status=200)
+            resp.headers['Content-Length'] = str(size)
+            resp.headers['Accept-Ranges'] = 'bytes'
+            sha_path = local_file_path + ".sha256"
+            if os.path.exists(sha_path):
+                with open(sha_path, 'r') as f:
+                    resp.headers['ETag'] = f'"{f.read().strip()}"'
+            return resp
         return serve_local_file(local_file_path, range_header)
 
-    trigger_background_download(real_url, local_file_path)
+    if request.method == 'GET':
+        trigger_background_download(real_url, local_file_path)
 
     try:
-        headers = {'Range': range_header} if range_header else {}
-        up_resp = requests.get(real_url, proxies=get_proxies(), headers=headers, stream=True, timeout=30, verify=False)
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in ['host', 'content-length']}
+        print(f"[*] [LFS] Proxying to upstream: {real_url}")
+        up_resp = requests.request(
+            method=request.method,
+            url=real_url, 
+            proxies=get_proxies(), 
+            headers=headers, 
+            stream=True, 
+            timeout=60, 
+            verify=False
+        )
         
         excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
         resp_headers = [(name, value) for (name, value) in up_resp.raw.headers.items()
                         if name.lower() not in excluded_headers]
         
+        if request.method == 'HEAD':
+            return Response(status=up_resp.status_code, headers=resp_headers)
+
         return Response(stream_with_context(up_resp.iter_content(chunk_size=1024*1024)), 
                         status=up_resp.status_code, 
                         headers=resp_headers)
@@ -88,19 +126,31 @@ def dynamic_proxy(protocol, domain, path):
 
 def trigger_background_download(url, local_path):
     with download_locks:
-        if local_path not in active_downloads:
-            active_downloads.add(local_path)
-            t = threading.Thread(target=robust_download, args=(url, local_path))
-            t.daemon = True
-            t.start()
+        if local_path in active_downloads:
+            return
+        if os.path.exists(local_path):
+            return
+        active_downloads.add(local_path)
+        print(f"[*] [CACHE] Triggering background download for: {url}")
+        t = threading.Thread(target=robust_download, args=(url, local_path))
+        t.daemon = True
+        t.start()
 
 def serve_local_file(path, range_header):
     size = os.path.getsize(path)
     if range_header:
         try:
             ranges = range_header.replace('bytes=', '').split('-')
-            start = int(ranges[0])
-            end = int(ranges[1]) if (len(ranges) > 1 and ranges[1]) else size - 1
+            if ranges[0]:
+                start = int(ranges[0])
+                end = int(ranges[1]) if (len(ranges) > 1 and ranges[1]) else size - 1
+            else:
+                end = size - 1
+                start = size - int(ranges[1])
+            
+            start = max(0, min(start, size - 1))
+            end = max(start, min(end, size - 1))
+            
             def gen():
                 with open(path, "rb") as f:
                     f.seek(start)
@@ -115,7 +165,8 @@ def serve_local_file(path, range_header):
             res.headers['Content-Length'] = str(end - start + 1)
             res.headers['Accept-Ranges'] = 'bytes'
             return res
-        except Exception: pass
+        except Exception as e:
+            print(f"[!] [LFS] Error parsing range {range_header}: {e}")
     def gen_full():
         with open(path, "rb") as f:
             while c := f.read(1024*1024): yield c

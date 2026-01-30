@@ -19,9 +19,9 @@
         reverse_proxy https://huggingface.co {
             header_up Host huggingface.co
             
-            # 将 Location 重定向拦截并转发回本地的 /lfs-proxy 接口
-            # 强制使用 localhost:8080 以保证 Origin 一致性
-            header_down Location ^(https?)://([^/]+)/(.*)$ http://localhost:8080/lfs-proxy/$1/$2/$3
+            # 将 Location 重定向拦截并转换为相对路径
+            # 核心修复：使用相对路径重定向，强制客户端保持当前的 Host 和 Port (不管是 localhost 还是局域网 IP)
+            header_down Location ^(https?)://([^/]+)/(.*)$ "/lfs-proxy/$1/$2/$3"
             
             transport http {
                 tls
