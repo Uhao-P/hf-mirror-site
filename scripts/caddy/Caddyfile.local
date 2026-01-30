@@ -1,0 +1,32 @@
+{
+    # Global options
+}
+
+:8080 {
+    log {
+        output file ./logs/caddy/localhost/hf.log
+    }
+
+    # 1. 匹配 LFS 拦截路径 (由 Caddy 自身处理重写后的请求)
+    handle_path /lfs-proxy/* {
+        # 转发给 Python 脚本的 /proxy/<protocol>/<domain>/<path...>
+        rewrite * /proxy{path}
+        reverse_proxy http://127.0.0.1:50001
+    }
+
+    # 2. 默认代理到 Hugging Face
+    handle /* {
+        reverse_proxy https://huggingface.co {
+            header_up Host huggingface.co
+            
+            # 将 Location 重定向拦截并转发回本地的 /lfs-proxy 接口
+            # 强制使用 localhost:8080 以保证 Origin 一致性
+            header_down Location ^(https?)://([^/]+)/(.*)$ http://localhost:8080/lfs-proxy/$1/$2/$3
+            
+            transport http {
+                tls
+                tls_insecure_skip_verify
+            }
+        }
+    }
+}

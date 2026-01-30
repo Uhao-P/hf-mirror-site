@@ -1,14 +1,14 @@
-cdn-lfs.MIRROR_HOST {
+cdn-lfs.{$MIRROR_HOST} {
 	import tls_hf_com
 	log hf
 
 	route / {
-		redir https://{MIRROR_HOST}
+		redir https://{$MIRROR_HOST}
 	}
 	@invlid_referer {
 		path_regexp .*/resolve/main/.*
 			not header !Referer
-			not header_regexp Referer ^https?://(\.*\.)?hf-mirror\.com(/|$)
+			not header_regexp Referer ^https?://(\.*\.)?{$MIRROR_HOST}(/|$)
 	}
 
 	route @invlid_referer {
@@ -17,32 +17,63 @@ cdn-lfs.MIRROR_HOST {
 
 	route /invalid_access.html {
 		file_server {
-			root /var/www/html/MIRROR_HOST/
+			root /var/www/html/{$MIRROR_HOST}/
 			index invalid_access.html
 		}
 	}
 	route /repos/* {
-		reverse_proxy {
-			to https://cdn-lfs.huggingface.co
-			lb_policy round_robin
-			header_up Host {upstream_hostport}
+		# 设置根目录
+		root * /var/www/html/{$MIRROR_HOST}/
+
+		# 定义一个匹配器 @cached：检查请求路径对应的文件是否存在
+		@cached file
+
+		# 情况1：如果本地文件存在，直接服务本地文件
+		handle @cached {
+			file_server
+		}
+
+		# 情况2：如果本地文件不存在（上面的 handle 没匹配），则走反向代理
+		handle {
+			reverse_proxy {$LFS_UPSTREAM:https://cdn-lfs.huggingface.co} {
+				header_up Host {upstream_hostport}
+				import outbound_proxy
+			}
 		}
 	}
+
 	route /* {
-		redir https://MIRROR_HOST
+		redir https://{$MIRROR_HOST}
 	}
 }
 
 
-cdn-lfs-us-1.MIRROR_HOST {
+cdn-lfs-us-1.{$MIRROR_HOST} {
 	import tls_hf_com
 	log hf
 	route /repos/* {
-		reverse_proxy https://cdn-lfs-us-1.huggingface.co {
-			header_up Host {upstream_hostport}
+		# 设置根目录
+		root * /var/www/html/{$MIRROR_HOST}/
+
+		# 定义匹配器
+		@cached_us file
+
+		# 情况1：本地存在则返回
+		handle @cached_us {
+			file_server
+		}
+
+		# 情况2：不存在则反代
+		handle {
+			reverse_proxy {$LFS_UPSTREAM_US:https://cdn-lfs-us-1.huggingface.co} {
+				header_up Host {upstream_hostport}
+				import outbound_proxy
+			}
 		}
 	}
+
+
 	route /* {
-			redir https://MIRROR_HOST
+			redir https://{$MIRROR_HOST}
 	}
 }
