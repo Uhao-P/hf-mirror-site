@@ -84,11 +84,86 @@ local_dir = huggingface_hub.snapshot_download(repo_id="facebook/opt-125m")
 ```
 
 ### CLI 支持
-由于它依赖安装 `huggingface-hub` 0.21.4 版本，`huggingface-cli` 命令行工具也将可用。要使其使用镜像：
+
+`bayes-hub` 提供了专用的 CLI 工具 `bayes-hub-cli`，它是 `huggingface-cli` 的封装，**自动配置了镜像端点**。
+
+#### 基本命令
 
 ```bash
-export HF_ENDPOINT=http://localhost:8080
-huggingface-cli download gpt2
+# 查看帮助
+bayes-hub-cli --help
+
+# 下载模型到当前目录（自动使用镜像）
+bayes-hub-cli download facebook/wav2vec2-xls-r-300m
+
+# 下载到指定目录（文件直接保存，不是软链接）
+bayes-hub-cli download facebook/wav2vec2-xls-r-300m --local-dir ./my-models
+
+# 下载单个文件
+bayes-hub-cli download gpt2 config.json
+
+# 下载数据集
+bayes-hub-cli download wikitext --repo-type dataset --local-dir ./data
+
+# 使用 token 下载私有模型
+bayes-hub-cli download meta-llama/Llama-2-7b-hf --token hf_xxx --local-dir ./llama2
+```
+
+#### 支持的子命令
+
+```bash
+# 环境信息
+bayes-hub-cli env
+
+# 登录 Hugging Face
+bayes-hub-cli login
+
+# 查看当前用户
+bayes-hub-cli whoami
+
+# 退出登录
+bayes-hub-cli logout
+
+# 下载模型/数据集
+bayes-hub-cli download <repo_id> [filenames...]
+
+# 上传文件
+bayes-hub-cli upload <repo_id> <local_path> <path_in_repo>
+
+# 扫描缓存
+bayes-hub-cli scan-cache
+
+# 删除缓存
+bayes-hub-cli delete-cache
+```
+
+#### 常用下载选项
+
+| 选项 | 说明 | 示例 |
+|------|------|------|
+| `--local-dir <path>` | 指定下载目录 | `--local-dir ./models` |
+| `--repo-type <type>` | 仓库类型（model/dataset/space） | `--repo-type dataset` |
+| `--revision <ref>` | 指定分支/标签/提交 | `--revision v1.0` |
+| `--include <pattern>` | 包含文件模式 | `--include "*.safetensors"` |
+| `--exclude <pattern>` | 排除文件模式 | `--exclude "*.bin"` |
+| `--token <token>` | 访问令牌 | `--token hf_xxx` |
+| `--quiet` | 静默模式（仅输出路径） | `--quiet` |
+
+#### 与 huggingface-cli 的区别
+
+| 特性 | `bayes-hub-cli` | `huggingface-cli` |
+|------|----------------|-------------------|
+| 镜像端点 | 自动使用 `http://localhost:8080` | 需要手动设置 `HF_ENDPOINT` |
+| 软链接行为 | 默认禁用（文件直接保存） | 默认 `auto`（大文件创建软链接） |
+| 版本锁定 | 强制使用 `huggingface-hub==0.21.4` | 依赖当前安装的版本 |
+
+#### 高级：手动设置端点
+
+如果需要连接到其他镜像服务器：
+
+```bash
+export HF_ENDPOINT=http://your-mirror-ip:8080
+bayes-hub-cli download gpt2
 ```
 
 ---
