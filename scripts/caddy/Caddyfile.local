@@ -1,17 +1,16 @@
-{
-    # Global options
-}
-
 :8080 {
     log {
         output file ./logs/caddy/localhost/hf.log
     }
 
-    # 1. 匹配 LFS 拦截路径 (由 Caddy 自身处理重写后的请求)
+    # 1. LFS 代理路径
     handle_path /lfs-proxy/* {
-        # 转发给 Python 脚本的 /proxy/<protocol>/<domain>/<path...>
         rewrite * /proxy{path}
-        reverse_proxy http://127.0.0.1:50001
+        reverse_proxy http://127.0.0.1:50001 {
+            # 确保转发所有头部
+            header_up X-Forwarded-Host {host}
+            header_up X-Real-IP {remote_host}
+        }
     }
 
     # 2. 默认代理到 Hugging Face
@@ -19,9 +18,12 @@
         reverse_proxy https://huggingface.co {
             header_up Host huggingface.co
             
-            # 将 Location 重定向拦截并转换为相对路径
-            # 核心修复：使用相对路径重定向，强制客户端保持当前的 Host 和 Port (不管是 localhost 还是局域网 IP)
-            header_down Location ^(https?)://([^/]+)/(.*)$ "/lfs-proxy/$1/$2/$3"
+            # 重写 LFS 重定向为绝对 URL
+            # 注意：huggingface-hub 库的 _request_wrapper 在处理相对重定向时有 bug，
+            # 它只保留 path 而丢弃 query 参数（见 file_download.py 第 403 行）。
+            # XetHub 的签名 URL 包含必需的查询参数，所以我们需要返回完整的绝对 URL。
+            # 使用 {http.request.hostport} 保留端口号（如 localhost:8080）
+            header_down Location ^(https?)://([^/]+)(/[^?]*)?(\?.*)?$ "http://{http.request.hostport}/lfs-proxy/$1/$2$3$4"
             
             transport http {
                 tls
